@@ -23,6 +23,7 @@ class MainHandler(webapp.RequestHandler):
             hooks = MailHook.all().filter('user =', user)
         else:
             login_url = users.create_login_url('/')
+        app_id = "mailhooks2" # can we get this dynamically?
         self.response.out.write(template.render('templates/main.html', locals()))
 
     def post(self):
