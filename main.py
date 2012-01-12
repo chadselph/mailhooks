@@ -47,8 +47,10 @@ class MailHandler(InboundMailHandler):
                 'from': mail_message.sender,
                 'to': mail_message.to,
                 'date': mail_message.date,
+                'text-bodies': [msg.decode() for _, msg in mail_message.bodies("text/plain")],
+                'html-bodies': [msg.decode() for _, msg in mail_message.bodies("html/plain")],
             }
-            urllib.urlopen(h.hook_url, urllib.urlencode(params))
+            urllib.urlopen(h.hook_url, urllib.urlencode(params, True))
 
     def get_email_name(self):
         # mail_message.to isn't quite what we want
