@@ -1,19 +1,15 @@
 #!/usr/bin/env python
 
-import wsgiref.handlers
-
-from google.appengine.ext import webapp
-from google.appengine.api import users
-from google.appengine.ext.webapp import template
-from google.appengine.ext import db
-from google.appengine.api import urlfetch
 from google.appengine.api import mail
-import time, urllib, os
+from google.appengine.api import urlfetch
+from google.appengine.api import users
+from google.appengine.ext import webapp
+from google.appengine.ext.webapp import template
+from google.appengine.ext.webapp.mail_handlers import InboundMailHandler 
+from google.appengine.ext.webapp.util import run_wsgi_app
+from google.appengine.ext import db
+import time, urllib, os, logging
 
-HOOKAH_URL = "http://hookah.progrium.com/dispatch"
-PDROID_URL = "http://pdroid.progrium.com"
-#PDROID_URL = "http://localhost:8080"
-PDROID_TOKEN = 'j083y7huf852s44s4sx4s4++__'
 
 def baseN(num,b,numerals="0123456789abcdefghijklmnopqrstuvwxyz"): 
     return ((num == 0) and  "0" ) or (baseN(num // b, b).lstrip("0") + numerals[num % b])
@@ -28,7 +24,7 @@ class MainHandler(webapp.RequestHandler):
         else:
             login_url = users.create_login_url('/')
         self.response.out.write(template.render('templates/main.html', locals()))
-    
+
     def post(self):
         if self.request.POST.get('name', None):
             h = MailHook.all().filter('name =', self.request.POST['name']).get()
@@ -38,37 +34,29 @@ class MainHandler(webapp.RequestHandler):
             h.put()
         self.redirect('/')
 
-class ReflectorHandler(webapp.RequestHandler):
-    def post(self):
-        name = self.request.POST['to'].split('@')[0]
-        hook = MailHook.all().filter('name =', name).get()
-        self.redirect(hook.hook_url)
+class MailHandler(InboundMailHandler):
+    def receive(self, mail_message):
+        to_user = self.get_email_name()
+        logging.info("Received a message from: %s to %s", mail_message.sender,
+                to_user)
+        h = MailHook.all().filter('name =', to_user).get()
+        if h:
+            params = {
+                'subject': mail_message.subject,
+                'from': mail_message.sender,
+                'to': mail_message.to,
+                'date': mail_message.date,
+            }
+            urllib.urlopen(h.hook_url, urllib.urlencode(params))
 
-class ListenHandler(webapp.RequestHandler):
-    def get(self):
-        try:
-            result = urlfetch.fetch(url='?'.join([os.path.join(PDROID_URL, 'smtp:listen:25'), str(abs(hash(time.time())))]))
-            if not result.content == PDROID_TOKEN:
-                resp = urlfetch.fetch(url=os.path.join(PDROID_URL, 'smtp:listen:25'), method='POST', 
-                            payload=urllib.urlencode({'callback':'http://www.mailhooks.com/reflector', 'token': PDROID_TOKEN}))
-                if not resp.status_code == 202:
-                    mail.send_mail(
-                        sender="MailHooks <robot@mailhooks.com>",
-                        to="progrium@gmail.com",
-                        subject="[MailHooks] Pdroid listen fail",
-                        body=resp.content)
-                    self.response.out.write(resp.content)
-                else:
-                    self.response.out.write("now listening")
-            else:
-                self.response.out.write("listening fine")
-        except urlfetch.DownloadError, e:
-            mail.send_mail(
-                sender="MailHooks <robot@mailhooks.com>",
-                to="progrium@gmail.com",
-                subject="[MailHooks] Pdroid down?",
-                body=str(e))
-            self.response.out.write("Pdroid down")
+    def get_email_name(self):
+        # mail_message.to isn't quite what we want
+        # for a bunch of silly reasons. we need to
+        # get the "to" data from the self.request.url
+        # self.request.url is "http://myserver/_ah/<user>%40<my_app>.appspot.com"
+        to_email = self.request.url.split("/")[-1]
+        to_email = urllib.unquote(to_email)
+        return to_email.split("@")[0] 
 
 class MailHook(db.Model):
     user = db.UserProperty(auto_current_user_add=True)
@@ -76,14 +64,16 @@ class MailHook(db.Model):
     name = db.StringProperty(required=True)
     created = db.DateTimeProperty(auto_now_add=True)
     updated = db.DateTimeProperty(auto_now=True)
-    
+
     def __init__(self, *args, **kwargs):
         kwargs['name'] = kwargs.get('name', baseN(abs(hash(time.time())), 36))
         super(MailHook, self).__init__(*args, **kwargs)
 
 def main():
-    application = webapp.WSGIApplication([('/', MainHandler), ('/reflector', ReflectorHandler), ('/listen', ListenHandler)], debug=True)
-    wsgiref.handlers.CGIHandler().run(application)
+    application = webapp.WSGIApplication([
+        ('/', MainHandler),
+        MailHandler.mapping()], debug=True)
+    run_wsgi_app(application)
 
 if __name__ == '__main__':
     main()
